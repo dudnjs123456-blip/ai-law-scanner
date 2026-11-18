@@ -199,9 +199,19 @@ export function scan(root) {
 
   const devAssets = {};
   const add = (tool, ev) => { const k = tool.toLowerCase().replace('-', ''); (devAssets[k] ??= { tool, count: 0, evidence: [] }); devAssets[k].count++; if (devAssets[k].evidence.length < 3) devAssets[k].evidence.push(ev); };
+  // 개발 메모(주석)에 적힌 도구 이름만 센다. 화면 글자나 코드 속 문자열은 그 도구를 "소개"하는 글일 수 있어서 뺀다
+  // (예: 포트폴리오 소개글의 "ElevenLabs로 만든 목소리"는 이 저장소가 AI 음성을 쓴다는 뜻이 아니다)
   for (const g of src) {
     const seen = new Set();
-    for (const m of g.raw.matchAll(new RegExp(DEV_TOOLS.source, 'gi'))) { const ln = lineOf(g.raw, m.index); const key = m[1].toLowerCase() + ln; if (seen.has(key)) continue; seen.add(key); add(m[1], { file: g.rel, line: ln, code: lineText(g.raw, ln) }); }
+    const codeLines = g.code.split('\n');
+    for (const m of g.raw.matchAll(new RegExp(DEV_TOOLS.source, 'gi'))) {
+      const ln = lineOf(g.raw, m.index);
+      const key = m[1].toLowerCase() + ln;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if ((codeLines[ln - 1] ?? '').toLowerCase().includes(m[1].toLowerCase())) continue; // 주석을 지워도 남아 있으면 코드·화면 글자다
+      add(m[1], { file: g.rel, line: ln, code: lineText(g.raw, ln) });
+    }
   }
   for (const rel of all) { const m = path.basename(rel).match(new RegExp(DEV_TOOLS.source, 'i')); if (m) add(m[1], { file: rel, line: 0, code: '(파일 이름)' }); }
 

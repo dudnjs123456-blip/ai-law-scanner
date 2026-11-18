@@ -47,7 +47,7 @@
   "devAssets": [
     {
       "tool": "Firefly",
-      "count": 11,
+      "count": 10,
       "evidence": [
         {
           "file": "scripts/process-fabric-textures.mjs",
@@ -60,9 +60,9 @@
           "code": "// 원본 파일 이름(Firefly 가 프롬프트로 붙인 이름)에 들어 있는 낱말로 어떤 원단인지 찾는다."
         },
         {
-          "file": "scripts/process-fabric-textures.mjs",
-          "line": 24,
-          "code": "const f = fs.readdirSync(SRC).find((n) => n.startsWith('Firefly') && n.includes(words));"
+          "file": "scripts/process-facades.mjs",
+          "line": 2,
+          "code": "* 건물 그림(Firefly 등) → 게임용 건물 텍스처."
         }
       ]
     },
