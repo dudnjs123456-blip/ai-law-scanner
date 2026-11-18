@@ -1,0 +1,14 @@
+[
+  {
+    "slug": "dudnjs123456-blip__ONE",
+    "repo": "https://github.com/dudnjs123456-blip/ONE",
+    "commit": "dcd75b8",
+    "commitMsg": "feat: 집안일 — 샤워 · 양치 · 설거지 · 빨래(세탁기 → 널기 → 개기)",
+    "scannedAt": "2026-11-18",
+    "counts": {
+      "hi": 4,
+      "lo": 6,
+      "ask": 4
+    }
+  }
+]
