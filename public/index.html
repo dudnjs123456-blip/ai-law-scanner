@@ -172,7 +172,7 @@ footer p{margin:0}
       <input id="repoUrl" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/회사/저장소">
       <button class="btn" type="submit" id="scanBtn">진단하기</button>
     </form>
-    <p class="status" id="scanStatus">GitHub 공개 저장소를 진단할 수 있어요. 코드는 실행하지 않고 읽기만 하며, 진단이 끝나면 바로 지워요.</p>
+    <p class="status" id="scanStatus">GitHub 공개 저장소를 진단할 수 있어요. AI 관련 법령과 AI 서비스 보안을 함께 점검해요. 코드는 실행하지 않고 읽기만 하며, 진단이 끝나면 바로 지워요.</p>
     <div id="report"><p class="note">진단 결과를 불러오는 중이에요.</p></div>
   </section>
 
@@ -467,6 +467,7 @@ footer p{margin:0}
 
   // ───────── 코드 진단 ─────────
   const STATUS = { hi:'위반 가능성 높음', mid:'검토 필요', ask:'확인 필요', ok:'조치 확인됨', lo:'해당 가능성 낮음' };
+  const SEC_STATUS = { hi:'위험 높음', mid:'주의', ask:'확인 필요', ok:'잘한 점', lo:'문제 없음' };
   const ORDER = { hi:0, mid:1, ask:2, ok:3, lo:4 };
   const norm = u => String(u||'').trim().replace(/\.git$/,'').replace(/\/+$/,'').replace(/^git@github\.com:/,'https://github.com/').replace(/^http:/,'https:').toLowerCase();
   let showAll = false, current = null, currentExample = false;
@@ -482,7 +483,16 @@ footer p{margin:0}
     current = r; currentExample = !!example;
     const c = {}; r.findings.forEach(x => c[x.s] = (c[x.s]||0)+1);
     const groups = LAWS.map(l => ({ l, items: r.findings.filter(x => x.law===l.id && (showAll || x.s!=='lo')).sort((a,b)=>ORDER[a.s]-ORDER[b.s]) })).filter(g => g.items.length);
-    const hidden = r.findings.filter(x => x.s==='lo').length;
+    const sec = (r.security || []).filter(x => showAll || x.s!=='lo').sort((a,b)=>ORDER[a.s]-ORDER[b.s]);
+    const sc = {}; (r.security || []).forEach(x => sc[x.s] = (sc[x.s]||0)+1);
+    const hidden = r.findings.filter(x => x.s==='lo').length + (r.security || []).filter(x => x.s==='lo').length;
+    const row = (x, label, code) => `
+              <div class="row">
+                <div class="drow"><div class="dname"><span>${h(x.title)}</span><span class="mono">${h(code)}</span></div><span class="pill ${x.s}">${label[x.s]}</span></div>
+                <p class="why">${h(x.why)}</p>
+                ${x.evidence.length ? `<div class="ev">${x.evidence.slice(0,4).map(e => `${link(r,e)}${e.code && !e.code.startsWith('(') ? `<pre>${h(e.code)}</pre>` : ''}`).join('')}</div>` : ''}
+                ${x.fix.length && x.s!=='ok' && x.s!=='lo' ? `<ul class="todo">${x.fix.map(t=>`<li>${h(t)}</li>`).join('')}</ul>` : ''}
+              </div>`;
     $('#report').innerHTML = `
       <div class="panel">
         ${currentExample ? '<div class="sample"><span><b>예시 결과</b>예요. 투게더 게임 저장소를 진단한 결과를 보여드리고 있어요.</span></div>' : ''}
@@ -493,19 +503,19 @@ footer p{margin:0}
         </div>
         <div class="counts">
           ${['hi','mid','ask','ok'].filter(k=>c[k]).map(k => `<div class="count ${k}"><b>${c[k]}</b>${STATUS[k]}</div>`).join('')}
+          ${['hi','mid'].filter(k=>sc[k]).map(k => `<div class="count ${k}"><b>${sc[k]}</b>보안 ${SEC_STATUS[k]}</div>`).join('')}
         </div>
         <label class="toggle"><input type="checkbox" id="showAll" ${showAll?'checked':''}> 해당 가능성 낮은 항목 ${hidden}개도 보기</label>
         ${groups.map(g => `
           <div class="lawgroup">
             <h3>${g.l.name} <a href="#laws">법령 보기</a></h3>
-            <div class="box">${g.items.map(x => `
-              <div class="row">
-                <div class="drow"><div class="dname"><span>${h(x.title)}</span><span class="mono">${h(x.article)}</span></div><span class="pill ${x.s}">${STATUS[x.s]}</span></div>
-                <p class="why">${h(x.why)}</p>
-                ${x.evidence.length ? `<div class="ev">${x.evidence.slice(0,4).map(e => `${link(r,e)}${e.code && !e.code.startsWith('(') ? `<pre>${h(e.code)}</pre>` : ''}`).join('')}</div>` : ''}
-                ${x.fix.length && x.s!=='ok' && x.s!=='lo' ? `<ul class="todo">${x.fix.map(t=>`<li>${h(t)}</li>`).join('')}</ul>` : ''}
-              </div>`).join('')}</div>
+            <div class="box">${g.items.map(x => row(x, STATUS, x.article)).join('')}</div>
           </div>`).join('')}
+        ${sec.length ? `
+          <div class="lawgroup">
+            <h3>보안 점검 <span class="mono">OWASP Top 10 for LLM 기준</span></h3>
+            <div class="box">${sec.map(x => row(x, SEC_STATUS, x.owasp)).join('')}</div>
+          </div>` : ''}
       </div>`;
     $('#showAll').addEventListener('change', e => { showAll = e.target.checked; renderReport(current, currentExample); });
   }

@@ -1,0 +1,24 @@
+# 코드를 올릴 때마다 진단 엔진 회귀 테스트를 돌린다.
+# 고정 커밋 저장소(Together, 포트폴리오)까지 내려받아 확인하는 전체 테스트다.
+# (Vercel 배포 때는 인터넷 없이 도는 테스트만 빌드 전에 돌려서, 실패하면 배포를 멈춘다)
+name: 진단 엔진 테스트
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: 회귀 테스트 (스냅숏 + 변형)
+        run: npm test

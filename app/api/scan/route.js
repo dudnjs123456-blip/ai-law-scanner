@@ -9,10 +9,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
-import { x as untar } from 'tar';
-import { scan, needsContent } from '../../../scan.mjs';
+import { scan } from '../../../scan.mjs';
+import { fetchRepo } from '../../../lib/fetch-repo.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -74,40 +72,7 @@ export async function POST(req) {
   // 3) 그 커밋의 코드를 받아 임시 폴더에 풀기
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-law-'));
   try {
-    const dl = await fetch(`https://codeload.github.com/${t.owner}/${t.repo}/tar.gz/${commit.sha}`, { headers: { 'User-Agent': 'ai-law-scanner' } });
-    if (!dl.ok || !dl.body) return fail(502, '코드를 내려받지 못했어요.');
-    // 먼저 끝까지 받고(크기 제한을 넘으면 중단) 한 번에 푼다. 받으면서 푸는 것보다 빠르다
-    const parts = [];
-    let bytes = 0;
-    for await (const chunk of dl.body) {
-      bytes += chunk.length;
-      if (bytes > MAX_DOWNLOAD) throw new Error('too_big');
-      parts.push(chunk);
-    }
-    let files = 0;
-    const nameOnly = []; // 내용 없이 이름만 남길 파일 (이미지·음성·3D 모델 등)
-    await pipeline(
-      Readable.from([Buffer.concat(parts)]),
-      untar({
-        cwd: dir,
-        strip: 1,
-        filter: (p, entry) => {
-          if (entry.type === 'Directory') return true;
-          if (entry.type !== 'File' || ++files > MAX_FILES) return false;
-          const rel = p.split('/').slice(1).join('/'); // 맨 앞 폴더(저장소-커밋)를 뺀 경로
-          if (needsContent(rel)) return true;
-          nameOnly.push(rel);
-          return false;
-        },
-      }),
-    );
-    // 이름만 남길 파일은 빈 파일로 만든다. 저장소 밖으로 나가는 경로는 무시한다
-    for (const rel of nameOnly) {
-      const target = path.resolve(dir, rel);
-      if (!rel || !target.startsWith(dir + path.sep)) continue;
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, '');
-    }
+    const got = await fetchRepo({ owner: t.owner, repo: t.repo, sha: commit.sha, dir, maxDownload: MAX_DOWNLOAD, maxFiles: MAX_FILES });
 
     // 4) 진단
     const result = scan(dir);
@@ -118,13 +83,14 @@ export async function POST(req) {
         commitMsg: (commit.commit?.message ?? '').split('\n')[0],
         commitDate: (commit.commit?.committer?.date ?? '').slice(0, 10),
         scannedAt: new Date().toISOString().slice(0, 10),
-        scanner: '0.3',
-        truncated: files > MAX_FILES,
+        scanner: '0.4',
+        truncated: got.truncated,
       },
       ...result,
     });
   } catch (e) {
     if (e?.message === 'too_big') return fail(413, '내려받는 코드가 300MB를 넘어서 진단을 멈췄어요.');
+    if (e?.message === 'download_failed') return fail(502, '코드를 내려받지 못했어요.');
     console.error('scan failed', e);
     return fail(500, '진단 중 오류가 났어요. 잠시 후 다시 시도해 주세요.');
   } finally {

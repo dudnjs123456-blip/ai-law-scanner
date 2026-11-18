@@ -5,7 +5,7 @@
     "commitMsg": "feat: 집안일 — 샤워 · 양치 · 설거지 · 빨래(세탁기 → 널기 → 개기)",
     "commitDate": "2026-11-17",
     "scannedAt": "2026-11-18",
-    "scanner": "0.2"
+    "scanner": "0.4"
   },
   "files": 378,
   "sourceFiles": 215,
@@ -294,6 +294,104 @@
           "code": "import Anthropic from '@anthropic-ai/sdk';"
         }
       ]
+    }
+  ],
+  "security": [
+    {
+      "id": "secrets",
+      "owasp": "LLM02",
+      "title": "비밀키 노출",
+      "s": "lo",
+      "why": "코드와 설정 파일에서 비밀키로 보이는 값을 찾지 못했어요.",
+      "fix": [],
+      "evidence": []
+    },
+    {
+      "id": "client-key",
+      "owasp": "LLM02",
+      "title": "브라우저로 새는 AI 키",
+      "s": "ok",
+      "why": "AI 호출을 서버에서만 하고 있어요. API 키가 브라우저로 나가지 않아요.",
+      "fix": [],
+      "evidence": [
+        {
+          "file": "src/app/api/npc-chat/route.ts",
+          "line": 1,
+          "code": "import Anthropic from '@anthropic-ai/sdk';"
+        }
+      ]
+    },
+    {
+      "id": "prompt-injection",
+      "owasp": "LLM01",
+      "title": "프롬프트 인젝션",
+      "s": "mid",
+      "why": "사용자(브라우저)가 보낸 값이 AI의 시스템 지시문에 들어가요. 이용자가 값을 조작해 AI에게 원래 규칙을 무시하라고 지시할 수 있어요.",
+      "fix": [
+        "시스템 지시문에는 서버가 직접 만든 값만 넣기",
+        "브라우저가 보낸 값은 허용 목록·길이 제한으로 걸러서 넣기",
+        "AI 응답도 서버에서 한 번 더 검사하기"
+      ],
+      "evidence": [
+        {
+          "file": "src/app/api/npc-chat/route.ts",
+          "line": 66,
+          "code": "messages: [...history, { role: 'system', content: npc.id === 'mom' ? describeMom(body.context) : describe(body.context) }],"
+        }
+      ]
+    },
+    {
+      "id": "output-html",
+      "owasp": "LLM05",
+      "title": "AI 응답의 HTML 삽입",
+      "s": "ok",
+      "why": "AI 응답을 보여 주는 화면이 HTML을 그대로 넣지 않아요.",
+      "fix": [],
+      "evidence": [
+        {
+          "file": "src/components/NpcChatPanel.tsx",
+          "line": 0,
+          "code": "(AI 응답을 보여 주는 화면)"
+        }
+      ]
+    },
+    {
+      "id": "consumption",
+      "owasp": "LLM10",
+      "title": "AI 호출 횟수·비용 제한",
+      "s": "mid",
+      "why": "AI를 부르는 서버(/api/npc-chat)에서 요청 횟수 제한을 찾지 못했어요. 누군가 반복해서 부르면 AI 요금이 크게 나올 수 있어요. 로그인 확인도 찾지 못했어요, 입력·응답 길이 제한은 있어요.",
+      "fix": [
+        "사용자·IP별로 1분당 요청 횟수 제한하기",
+        "AI 회사 대시보드에서 월 사용 한도 걸기",
+        "화면 쪽 제한은 우회할 수 있으니 서버에서 제한하기"
+      ],
+      "evidence": [
+        {
+          "file": "src/app/api/npc-chat/route.ts",
+          "line": 1,
+          "code": "import Anthropic from '@anthropic-ai/sdk';"
+        },
+        {
+          "file": "src/app/api/npc-chat/route.ts",
+          "line": 12,
+          "code": "const MAX_TURNS = 20;"
+        },
+        {
+          "file": "src/app/api/npc-chat/route.ts",
+          "line": 13,
+          "code": "const MAX_CHARS = 200;"
+        }
+      ]
+    },
+    {
+      "id": "dynamic-code",
+      "owasp": "A03",
+      "title": "문자열을 코드로 실행",
+      "s": "lo",
+      "why": "eval이나 new Function을 쓰는 곳이 없어요.",
+      "fix": [],
+      "evidence": []
     }
   ]
 }

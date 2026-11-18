@@ -5,9 +5,10 @@
   "description": "깃 저장소 코드를 읽어 AI 관련 법령 위반 가능성을 진단하는 웹 서비스",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node tests/run.mjs --offline && next build",
     "start": "next start",
-    "scan": "node scan.mjs"
+    "scan": "node scan.mjs",
+    "test": "node tests/run.mjs"
   },
   "dependencies": {
     "next": "15.5.28",

@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { judgeSecurity, needsSecurityContent } from './security.mjs';
 
 // ───────────────────────── 설정 ─────────────────────────
 
@@ -26,7 +27,7 @@ const SRC_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.
 const MAX_BYTES = 1_000_000;
 
 /** 내용을 읽어야 하는 파일인가 (나머지는 이름만 본다) */
-export const needsContent = (rel) => SRC_EXT.has(path.extname(rel).toLowerCase()) || /(^|\/)(package\.json|requirements[^/]*\.txt|pyproject\.toml)$/.test(rel);
+export const needsContent = (rel) => SRC_EXT.has(path.extname(rel).toLowerCase()) || /(^|\/)(package\.json|requirements[^/]*\.txt|pyproject\.toml)$/.test(rel) || needsSecurityContent(rel);
 
 /** 생성형 AI SDK·API. 모두 해외 회사 서버로 데이터가 나간다 */
 const SDKS = [
@@ -225,6 +226,7 @@ export function scan(root) {
     reviewGen: firstHit(ctxFiles, REVIEW_HINT),
   };
   ev.findings = judge(ev);
+  ev.security = judgeSecurity({ root, all, src, appSrc, byRel, importsOf, sites });
   return ev;
 }
 
@@ -350,6 +352,13 @@ function printText(r) {
       out.push(`${ICON[x.s]} ${x.title} (${x.article}) — ${LABEL[x.s]}`, `   ${x.why}`);
       for (const e of x.evidence.slice(0, 3)) out.push(`   · ${e.file}${e.line ? ':' + e.line : ''}`);
     }
+  }
+  const SEC = { hi: '위험 높음', mid: '주의', ok: '잘한 점', lo: '문제 없음', ask: '확인 필요' };
+  const SEC_ICON = { hi: '🔴', mid: '🟡', ok: '🟢', lo: '⚪', ask: '❔' };
+  out.push('\n[보안 점검]');
+  for (const x of r.security ?? []) {
+    out.push(`${SEC_ICON[x.s]} ${x.title} (${x.owasp}) — ${SEC[x.s]}`, `   ${x.why}`);
+    for (const e of x.evidence.slice(0, 3)) out.push(`   · ${e.file}${e.line ? ':' + e.line : ''}`);
   }
   out.push('\n※ 법률 자문이 아닌 참고용 진단입니다.\n');
   console.log(out.filter((x) => x !== '').join('\n'));
