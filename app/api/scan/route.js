@@ -1,5 +1,6 @@
 /**
  * POST /api/scan  { url: "https://github.com/회사/저장소" }
+ * GET  /api/scan?url=https://github.com/회사/저장소   (첫 화면 실시간 진단용 — Vercel CDN 이 1분간 모두에게 같은 결과를 돌려준다)
  *
  * GitHub 공개 저장소를 압축 파일로 받아 임시 폴더에 풀고, scan.mjs 로 진단한 뒤 바로 지운다.
  * - 받은 코드는 실행하지 않는다 (읽기만 한다)
@@ -21,6 +22,13 @@ const MAX_REPO_KB = 500_000; // GitHub 가 알려주는 저장소 크기 (커밋
 const MAX_DOWNLOAD = 300 * 1024 * 1024; // 내려받는 압축 파일 크기
 const MAX_FILES = 20_000;
 const PER_MINUTE = 5; // 한 사람(IP)당 1분에 진단 5번
+
+// 같은 커밋은 결과가 같으므로 서버 메모리에 잠시 둔다 (다시 받지 않고 바로 돌려준다)
+const results = new Map();
+const MAX_CACHED = 30;
+// 첫 화면 결과는 CDN 에 1분 두고, 그 뒤 10분까지는 옛 결과를 주면서 뒤에서 새로 진단한다
+// → 방문자가 많아도 GitHub 요청은 1분에 한 번 정도
+const CDN_CACHE = 'public, s-maxage=60, stale-while-revalidate=600';
 
 const recent = new Map();
 function tooMany(ip) {
@@ -48,12 +56,25 @@ const github = (p) =>
 const fail = (status, error) => Response.json({ error }, { status });
 
 export async function POST(req) {
+  let body;
+  try { body = await req.json(); } catch { return fail(400, '요청 형식이 올바르지 않아요.'); }
+  return scan(req, body?.url);
+}
+
+export async function GET(req) {
+  const res = await scan(req, new URL(req.url).searchParams.get('url'));
+  if (res.ok) {
+    res.headers.set('Cache-Control', CDN_CACHE);
+    res.headers.set('Vercel-CDN-Cache-Control', CDN_CACHE);
+  }
+  return res;
+}
+
+async function scan(req, url) {
   const ip = (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim() || 'local';
   if (tooMany(ip)) return fail(429, '요청이 너무 잦아요. 1분 뒤에 다시 시도해 주세요.');
 
-  let body;
-  try { body = await req.json(); } catch { return fail(400, '요청 형식이 올바르지 않아요.'); }
-  const t = parseRepo(body?.url);
+  const t = parseRepo(url);
   if (!t) return fail(400, 'GitHub 저장소 주소를 넣어주세요. 예: https://github.com/회사/저장소');
 
   // 1) 저장소 정보 (크기, 기본 브랜치)
@@ -68,6 +89,8 @@ export async function POST(req) {
   const cr = await github(`/repos/${t.owner}/${t.repo}/commits/${encodeURIComponent(repo.default_branch)}`);
   if (!cr.ok) return fail(502, '최신 커밋 정보를 받지 못했어요.');
   const commit = await cr.json();
+  const key = `${repo.full_name}@${commit.sha}`;
+  if (results.has(key)) return Response.json(results.get(key));
 
   // 3) 그 커밋의 코드를 받아 임시 폴더에 풀기
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-law-'));
@@ -76,7 +99,7 @@ export async function POST(req) {
 
     // 4) 진단
     const result = await scanFull(dir);
-    return Response.json({
+    const out = {
       meta: {
         repo: `https://github.com/${repo.full_name}`,
         commit: commit.sha.slice(0, 7),
@@ -87,7 +110,10 @@ export async function POST(req) {
         truncated: got.truncated,
       },
       ...result,
-    });
+    };
+    results.set(key, out);
+    if (results.size > MAX_CACHED) results.delete(results.keys().next().value);
+    return Response.json(out);
   } catch (e) {
     if (e?.message === 'too_big') return fail(413, '내려받는 코드가 300MB를 넘어서 진단을 멈췄어요.');
     if (e?.message === 'download_failed') return fail(502, '코드를 내려받지 못했어요.');

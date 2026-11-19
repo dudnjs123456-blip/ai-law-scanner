@@ -169,6 +169,9 @@ footer p{margin:0}
 .news .s{color:var(--muted);font-size:13.5px;margin:0;overflow-wrap:anywhere}
 .news .tag{font-size:12px;border-radius:4px;padding:0 6px;background:var(--accent-soft);color:var(--accent)}
 .news .tag.sev{background:var(--hi-soft);color:var(--hi)}
+.newsbtns{display:flex;gap:8px;flex-wrap:wrap}
+#trBtn[aria-pressed="true"]{background:var(--accent);color:var(--surface)}
+.news .tag.mt{background:var(--na-soft);color:var(--na)}
 .news .sumbtn{align-self:flex-start;margin-top:4px}
 .news .sum{margin-top:6px;border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 8px 8px 0;padding:10px 14px;display:flex;flex-direction:column;gap:6px;font-size:13.5px}
 .news .sum ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
@@ -308,7 +311,8 @@ footer p{margin:0}
       <label class="status" for="newsQ" hidden>검색</label>
       <input id="newsQ" type="search" placeholder="검색 (예: npm, CVE, 프롬프트)" autocomplete="off" style="flex:1 1 200px;min-width:0;font:inherit;font-size:13.5px;padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)">
     </div>
-    <div class="newsmeta"><span class="status" id="newsStatus">불러오는 중이에요.</span><button type="button" class="btn-ghost" id="newsReload">새로고침</button></div>
+    <div class="newsmeta"><span class="status" id="newsStatus">불러오는 중이에요.</span><span class="newsbtns"><button type="button" class="btn-ghost" id="trBtn" aria-pressed="false">영어 글 한국어로 보기</button><button type="button" class="btn-ghost" id="newsReload">새로고침</button></span></div>
+    <p class="status" id="trStatus" hidden></p>
     <div class="box"><ul class="news" id="newsList"></ul></div>
     <p class="srcs" id="newsSources"></p>
   </section>
@@ -518,10 +522,11 @@ footer p{margin:0}
     const s = news.sums.get(url);
     if (!s) return '<p class="from">요약하는 중이에요.</p>';
     if (s.error) return `<p class="from">${h(s.error)}</p>`;
-    return `<ul>${s.points.map(p => `<li>${h(p)}</li>`).join('')}</ul>
-      ${s.action ? `<p class="act"><b>해야 할 일</b> ${h(s.action)}</p>` : ''}
+    const L = news.data?.items.find(i => i.url === url)?.lang;
+    return `<ul>${s.points.map(p => `<li>${h(tx(p, L))}</li>`).join('')}</ul>
+      ${s.action ? `<p class="act"><b>해야 할 일</b> ${h(tx(s.action, L))}</p>` : ''}
       ${s.cves?.length ? `<p class="from">관련 CVE: ${s.cves.map(h).join(', ')}</p>` : ''}
-      <p class="from">${FROM[s.from] ?? ''} AI가 새로 쓴 요약이 아니라 원문 문장 그대로예요.</p>`;
+      <p class="from">${FROM[s.from] ?? ''} AI가 새로 쓴 요약이 아니라 원문 문장${tr.on && L === 'en' ? '을 기계 번역한 거예요' : ' 그대로예요'}.</p>`;
   }
   async function toggleSum(btn){
     const url = btn.dataset.sum, box = btn.nextElementSibling;
@@ -539,6 +544,69 @@ footer p{margin:0}
     // 그사이 목록이 다시 그려졌을 수 있으니 지금 화면의 상자를 찾아 채운다
     for (const b of document.querySelectorAll('#newsList [data-sum]')) if (b.dataset.sum === url && news.open.has(url)) b.nextElementSibling.innerHTML = sumHtml(url);
   }
+  // ───────── 영어 → 한국어 번역 ─────────
+  // 지금은 브라우저 내장 번역(Chrome Translator API)을 쓴다. 방문자 컴퓨터 안에서 번역되므로 서버 비용이 없고 글이 밖으로 나가지 않는다.
+  // 나중에 자체 모델로 바꾸려면 ENGINE.create() 가 { translate(text) } 를 돌려주게만 바꾸면 된다 (예: /api/translate 호출).
+  const TR_PREF = 'newsTranslate';
+  const HANGUL = /[가-힣]/; // 이미 한국어인 글(묶음 제목 등)은 번역하지 않는다
+  const isEn = i => i.lang === 'en' && !HANGUL.test(i.title);
+  const tr = { on: false, engine: null, cache: new Map(), queue: [], queued: new Set(), busy: false, fallback: false, timer: null };
+  const ENGINE = {
+    supported: () => 'Translator' in self,
+    availability: () => self.Translator.availability({ sourceLanguage: 'en', targetLanguage: 'ko' }),
+    create: (onProgress) => self.Translator.create({ sourceLanguage: 'en', targetLanguage: 'ko',
+      monitor(m){ m.addEventListener('downloadprogress', e => onProgress(e.loaded)); } }),
+  };
+  const trSay = t => { const el = $('#trStatus'); el.hidden = !t; el.textContent = t || ''; };
+  const pref = v => { try { if (v === undefined) return localStorage.getItem(TR_PREF) === '1'; localStorage.setItem(TR_PREF, v ? '1' : '0'); } catch { return false; } };
+  // 영어 글이면 번역본(있으면)을, 아직이면 원문을 돌려주고 번역을 예약한다
+  function tx(text, lang){
+    if (!tr.on || lang !== 'en' || !text || HANGUL.test(text)) return text;
+    if (tr.cache.has(text)) return tr.cache.get(text);
+    if (!tr.queued.has(text)) { tr.queued.add(text); tr.queue.push(text); pump(); }
+    return text;
+  }
+  async function pump(){
+    if (tr.busy || !tr.engine) return; tr.busy = true;
+    while (tr.on && tr.queue.length) {
+      const text = tr.queue.shift();
+      trSay(`번역하는 중이에요. ${tr.queue.length + 1}개 남았어요.`);
+      try { tr.cache.set(text, await tr.engine.translate(text)); } catch { tr.cache.set(text, text); }
+      tr.queued.delete(text);
+      clearTimeout(tr.timer); tr.timer = setTimeout(rerender, 350);
+    }
+    tr.busy = false;
+    if (tr.on) trSay('영어 글을 브라우저 내장 번역으로 옮겼어요. 기계 번역이라 어색할 수 있어요. 제목 위에 마우스를 올리면 원문이 보여요.');
+    rerender();
+  }
+  function rerender(){
+    renderNews();
+    for (const b of document.querySelectorAll('#newsList [data-sum]')) if (news.open.has(b.dataset.sum)) b.nextElementSibling.innerHTML = sumHtml(b.dataset.sum);
+  }
+  function setTrBtn(){ const b = $('#trBtn'); b.setAttribute('aria-pressed', tr.on); b.textContent = tr.on ? '원문으로 보기' : '영어 글 한국어로 보기'; }
+  async function turnOn(fromClick){
+    if (!ENGINE.supported()) {
+      tr.fallback = true; renderNews();
+      trSay('이 브라우저는 내장 번역을 지원하지 않아요. PC용 최신 Chrome에서 쓸 수 있어요. 대신 영어 글마다 "구글 번역으로 읽기" 링크를 달아 두었어요.');
+      return;
+    }
+    try {
+      const a = await ENGINE.availability();
+      if (a === 'unavailable') { trSay('이 브라우저에서는 영어→한국어 번역을 쓸 수 없어요.'); return; }
+      // 번역 모델을 처음 받을 때는 버튼을 눌러야만 받을 수 있다 (브라우저 규칙)
+      if (a !== 'available' && !fromClick) return;
+      if (a !== 'available') trSay('번역 모델을 받는 중이에요. 처음 한 번만 받아요.');
+      tr.engine = await ENGINE.create(p => trSay(`번역 모델을 받는 중이에요. ${Math.round(p * 100)}%`));
+      tr.on = true; pref(true); setTrBtn(); trSay('번역하는 중이에요.'); rerender(); pump();
+    } catch (e) { trSay('번역을 시작하지 못했어요. 잠시 뒤 다시 눌러 주세요.'); }
+  }
+  $('#trBtn').addEventListener('click', () => {
+    if (tr.on) { tr.on = false; pref(false); setTrBtn(); trSay(''); rerender(); return; }
+    turnOn(true);
+  });
+  // 전에 번역을 켜 두었고 모델이 이미 있으면 자동으로 켠다
+  if (pref() && ENGINE.supported()) turnOn(false);
+
   const ago = iso => {
     if (!iso) return '';
     const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
@@ -554,12 +622,12 @@ footer p{margin:0}
     $('#newsTopics').innerHTML = [['', '전체', byLang.length], ...d.topics.map(t => [t.id, t.label, byLang.filter(i => i.topics.includes(t.id)).length])]
       .map(([id, l, n]) => `<button type="button" class="chip" data-topic="${id}" aria-pressed="${news.topic === id}">${h(l)} ${n}</button>`).join('');
     const q = news.q.trim().toLowerCase();
-    const list = byLang.filter(i => (!news.topic || i.topics.includes(news.topic)) && (!q || (i.title + ' ' + i.summary + ' ' + i.sourceName).toLowerCase().includes(q)));
+    const list = byLang.filter(i => (!news.topic || i.topics.includes(news.topic)) && (!q || (i.title + ' ' + i.summary + ' ' + i.sourceName + ' ' + (tr.cache.get(i.title) ?? '') + ' ' + (tr.cache.get(i.summary) ?? '')).toLowerCase().includes(q)));
     $('#newsList').innerHTML = list.length ? list.slice(0, 200).map(i => `<li>
-      <a class="t" href="${h(i.url)}" target="_blank" rel="noopener noreferrer">${h(i.title)}</a>
-      ${i.summary ? `<p class="s">${h(i.summary)}</p>` : ''}
+      <a class="t" href="${h(i.url)}" target="_blank" rel="noopener noreferrer"${tr.on && isEn(i) ? ` title="원문: ${h(i.title)}"` : ''}>${h(tx(i.title, i.lang))}</a>
+      ${i.summary ? `<p class="s">${h(i.source.startsWith('gh-') ? i.summary : tx(i.summary, i.lang))}</p>` : ''}
       ${i.summarizable ? `<button type="button" class="btn-ghost sumbtn" data-sum="${h(i.url)}" aria-expanded="${news.open.has(i.url)}">${news.open.has(i.url) ? '요약 접기' : '핵심 요약'}</button><div class="sum" ${news.open.has(i.url) ? '' : 'hidden'}>${sumHtml(i.url)}</div>` : ''}
-      <div class="m"><span>${h(i.sourceName)}</span><time datetime="${h(i.date)}" title="${i.date ? h(new Date(i.date).toLocaleString('ko-KR')) : ''}">${h(ago(i.date))}</time>${SEV[i.severity] ? `<span class="tag sev">${SEV[i.severity]}</span>` : ''}${i.topics.map(t => `<span class="tag">${h(label[t])}</span>`).join('')}</div>
+      <div class="m"><span>${h(i.sourceName)}</span><time datetime="${h(i.date)}" title="${i.date ? h(new Date(i.date).toLocaleString('ko-KR')) : ''}">${h(ago(i.date))}</time>${SEV[i.severity] ? `<span class="tag sev">${SEV[i.severity]}</span>` : ''}${i.topics.map(t => `<span class="tag">${h(label[t])}</span>`).join('')}${tr.on && isEn(i) ? '<span class="tag mt">기계 번역</span>' : ''}${tr.fallback && isEn(i) && /^https?:/.test(i.url) ? `<a href="https://translate.google.com/translate?sl=en&amp;tl=ko&amp;u=${encodeURIComponent(i.url)}" target="_blank" rel="noopener noreferrer">구글 번역으로 읽기</a>` : ''}</div>
     </li>`).join('') : '<li class="note">조건에 맞는 소식이 없어요.</li>';
     $('#newsStatus').textContent = `${list.length}건 · 마지막 수집 ${ago(d.updatedAt)} (${new Date(d.updatedAt).toLocaleString('ko-KR')})`;
     $('#newsSources').innerHTML = '출처 ' + d.sources.map(s => s.ok ? `${h(s.name)} ${s.count}` : `<span class="bad" title="${h(s.error)}">${h(s.name)} 불러오기 실패</span>`).join(' · ');
@@ -734,8 +802,14 @@ footer p{margin:0}
     </details>`;
   };
 
+  // 첫 화면 예시 상태: saved(저장된 결과, 실시간 진단 중) · live(방금 실시간 진단) · failed(실시간 실패, 저장된 결과)
+  const SAMPLE_NOTE = {
+    saved: '<b>저장된 예시 결과</b>예요. 투게더 게임 저장소의 최신 코드로 다시 진단하는 중…',
+    live: '<b>실시간 진단 결과</b>예요. 투게더 게임 저장소의 최신 커밋을 방금 진단했어요.',
+    failed: '<b>저장된 예시 결과</b>예요. 실시간 진단을 하지 못해 전에 진단한 결과를 보여드려요.',
+  };
   function renderReport(r, example){
-    current = r; currentExample = !!example;
+    current = r; currentExample = example || false;
     const c = {}; r.findings.forEach(x => c[x.s] = (c[x.s]||0)+1);
     const groups = LAWS.map(l => ({ l, items: r.findings.filter(x => x.law===l.id && (showAll || x.s!=='lo')).sort((a,b)=>ORDER[a.s]-ORDER[b.s]) })).filter(g => g.items.length);
     const sec = (r.security || []).filter(x => showAll || x.s!=='lo').sort((a,b)=>ORDER[a.s]-ORDER[b.s]);
@@ -752,7 +826,7 @@ footer p{margin:0}
     const all = buildAllPrompt(r);
     $('#report').innerHTML = `
       <div class="panel">
-        ${currentExample ? '<div class="sample"><span><b>예시 결과</b>예요. 투게더 게임 저장소를 진단한 결과를 보여드리고 있어요.</span></div>' : ''}
+        ${currentExample ? `<div class="sample"><span>${SAMPLE_NOTE[currentExample]}</span></div>` : ''}
         ${r.meta.truncated ? '<p class="note">파일이 너무 많아서 앞쪽 2만 개만 진단했어요.</p>' : ''}
         <div class="rhead">
           <h2>${h(r.meta.repo.replace(/^https:\/\//,''))}</h2>
@@ -805,10 +879,24 @@ footer p{margin:0}
       setBusy(false, '서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.');
     }
   }
-  $('#repoForm').addEventListener('submit', e => { e.preventDefault(); scanRepo($('#repoUrl').value); });
+  let ownScan = false; // 사용자가 직접 진단을 시작하면 첫 화면 예시로 덮어쓰지 않는다
+  $('#repoForm').addEventListener('submit', e => { e.preventDefault(); ownScan = true; scanRepo($('#repoUrl').value); });
+  // 첫 화면: 저장된 결과를 바로 보여주고, 뒤에서 최신 코드를 실시간 진단해 바꿔 끼운다
+  const EXAMPLE_REPO = 'https://github.com/dudnjs123456-blip/ONE';
   (async () => {
-    try { renderReport(await (await fetch('reports/example.json')).json(), true); }
-    catch (e) { $('#report').innerHTML = '<p class="note">위에 깃 저장소 주소를 넣고 진단해 보세요.</p>'; }
+    let saved = null;
+    try { saved = await (await fetch('reports/example.json')).json(); renderReport(saved, 'saved'); }
+    catch (e) { $('#report').innerHTML = '<p class="note">투게더 게임 저장소를 실시간으로 진단하는 중이에요…</p>'; }
+    try {
+      const res = await fetch('/api/scan?url=' + encodeURIComponent(EXAMPLE_REPO));
+      if (!res.ok) throw new Error(res.status);
+      const live = await res.json();
+      if (!ownScan) renderReport(live, 'live');
+    } catch (e) {
+      if (ownScan) return;
+      if (saved) renderReport(saved, 'failed');
+      else $('#report').innerHTML = '<p class="note">위에 깃 저장소 주소를 넣고 진단해 보세요.</p>';
+    }
   })();
 
   // ───────── 질문으로 진단 ─────────
