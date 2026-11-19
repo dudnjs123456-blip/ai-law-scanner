@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { scan } from '../../../scan.mjs';
+import { scanFull } from '../../../scan.mjs';
 import { fetchRepo } from '../../../lib/fetch-repo.mjs';
 
 export const runtime = 'nodejs';
@@ -75,7 +75,7 @@ export async function POST(req) {
     const got = await fetchRepo({ owner: t.owner, repo: t.repo, sha: commit.sha, dir, maxDownload: MAX_DOWNLOAD, maxFiles: MAX_FILES });
 
     // 4) 진단
-    const result = scan(dir);
+    const result = await scanFull(dir);
     return Response.json({
       meta: {
         repo: `https://github.com/${repo.full_name}`,
@@ -83,7 +83,7 @@ export async function POST(req) {
         commitMsg: (commit.commit?.message ?? '').split('\n')[0],
         commitDate: (commit.commit?.committer?.date ?? '').slice(0, 10),
         scannedAt: new Date().toISOString().slice(0, 10),
-        scanner: '0.4',
+        scanner: '0.5',
         truncated: got.truncated,
       },
       ...result,

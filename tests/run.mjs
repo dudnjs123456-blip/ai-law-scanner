@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scan } from '../scan.mjs';
 import { fetchRepo } from '../lib/fetch-repo.mjs';
+import { checkDependencies } from '../deps.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXPECTED = path.join(ROOT, 'tests', 'expected.json');
@@ -111,6 +112,73 @@ const MUTATIONS = [
     // AI 도구로 만든 에셋은 저작권 항목에도 함께 걸리는 게 맞다
     expect: { 'unfair:유명인 목소리·얼굴 무단 사용': 'ask', 'copyright:AI로 만든 에셋의 권리': 'ask' },
   },
+  {
+    name: 'Supabase 테이블에 RLS 가 없으면 위험 높음',
+    base: 'good-app',
+    apply: (d) => edit(d, 'supabase/migrations/0001_init.sql', () => 'create table public.notes (id uuid primary key, user_id uuid, body text);\n'),
+    expect: { '보안:Supabase 테이블 보안(RLS)': 'hi' },
+  },
+  {
+    name: 'RLS 는 켰지만 누구나 고칠 수 있는 정책이면 주의',
+    base: 'good-app',
+    apply: (d) => edit(d, 'supabase/migrations/0001_init.sql', () => 'create table public.notes (id uuid primary key, user_id uuid, body text);\nalter table public.notes enable row level security;\ncreate policy "anyone edit" on public.notes for update using (true);\n'),
+    expect: { '보안:Supabase 테이블 보안(RLS)': 'mid' },
+  },
+  {
+    name: 'RLS 와 본인 데이터만 다루는 정책이면 잘한 점',
+    base: 'good-app',
+    apply: (d) => edit(d, 'supabase/migrations/0001_init.sql', () => '-- 메모 테이블\ncreate table if not exists public.notes (id uuid primary key, user_id uuid, body text);\nalter table public.notes enable row level security;\ncreate policy "own read" on public.notes for select using (auth.uid() = user_id);\ncreate policy "own write" on public.notes for update using (auth.uid() = user_id) with check (auth.uid() = user_id);\n'),
+    expect: { '보안:Supabase 테이블 보안(RLS)': 'ok' },
+  },
+  {
+    name: '사용자 값을 SQL 문자열에 이어 붙이면 SQL 주입 위험',
+    base: 'good-app',
+    apply: (d) => edit(d, 'src/app/api/draw/route.ts', (s) => s.replace('const { prompt } = await req.json();', 'const { prompt } = await req.json();\n  const rows = await db.query(`select * from notes where id = ${req.url}`);')),
+    expect: { '보안:사용자 입력 주입': 'hi' },
+  },
+  {
+    name: '사용자 값으로 시스템 명령을 실행하면 명령어 주입 위험',
+    base: 'good-app',
+    apply: (d) => edit(d, 'src/app/api/draw/route.ts', (s) => s.replace('const { prompt } = await req.json();', 'const { prompt } = await req.json();\n  execSync(`convert ${req.url} out.png`);')),
+    expect: { '보안:사용자 입력 주입': 'hi' },
+  },
+  {
+    name: '사용자가 준 주소로 서버가 요청하면 SSRF 주의',
+    base: 'good-app',
+    apply: (d) => edit(d, 'src/app/api/draw/route.ts', (s) => s.replace('const { prompt } = await req.json();', "const { prompt } = await req.json();\n  const page = await fetch(req.headers.get('x-target'));")),
+    expect: { '보안:사용자 입력 주입': 'mid' },
+  },
+  {
+    name: 'CORS 를 모든 사이트에 열면 주의',
+    base: 'good-app',
+    apply: (d) => edit(d, 'src/app/api/draw/route.ts', (s) => s.replace('return Response.json(img);', "return Response.json(img, { headers: { 'Access-Control-Allow-Origin': '*' } });")),
+    expect: { '보안:CORS 전체 허용': 'mid' },
+  },
+];
+
+// 의존성 취약점 (인터넷 필요). 오래전에 알려진 취약점은 DB 에서 사라지지 않으므로 결과가 안정적이다
+const ONLINE = [
+  {
+    name: '취약점이 알려진 lodash 4.17.15 (다른 패키지 안에 포함) → 위험 높음',
+    files: {
+      'package.json': JSON.stringify({ name: 'deps-test', version: '1.0.0', dependencies: { 'legacy-utils': '1.0.0' } }),
+      'package-lock.json': JSON.stringify({ name: 'deps-test', lockfileVersion: 3, packages: {
+        '': { name: 'deps-test', version: '1.0.0' },
+        'node_modules/legacy-utils': { version: '1.0.0' },
+        'node_modules/legacy-utils/node_modules/lodash': { version: '4.17.15' },
+      } }),
+    },
+    check: (item) => [
+      item.s === 'hi' || `판정: 기대 hi → 실제 ${item.s} (${item.why})`,
+      item.evidence.some((e) => e.code.includes('lodash@4.17.15 (legacy-utils 안에 포함)')) || '근거에 "lodash@4.17.15 (legacy-utils 안에 포함)" 이 없어요',
+      item.fix.some((t) => t.includes('legacy-utils')) || '고칠 방법에 legacy-utils 를 올리라는 안내가 없어요',
+    ],
+  },
+  {
+    name: '잠금 파일 없이 package.json 만 있으면 확인 필요',
+    files: { 'package.json': JSON.stringify({ name: 'deps-test', dependencies: { lodash: '^4.17.0' } }) },
+    check: (item) => [item.s === 'ask' || `판정: 기대 ask → 실제 ${item.s}`],
+  },
 ];
 
 // ───────────────────────── 실행 ─────────────────────────
@@ -153,6 +221,22 @@ for (const m of MUTATIONS) {
     log(wrong.length === 0 && side.length === 0, m.name, [...wrong, ...side].join('\n'));
   } catch (e) {
     log(false, m.name, `    오류: ${e.message}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+console.log('\n[의존성 취약점]');
+for (const t of ONLINE) {
+  if (OFFLINE) { log(null, `${t.name} (건너뜀: --offline)`); continue; }
+  const dir = tmp('deps');
+  try {
+    for (const [rel, body] of Object.entries(t.files)) fs.writeFileSync(path.join(dir, rel), body);
+    const all = fs.readdirSync(dir, { recursive: true }).map((p) => String(p).replace(/\\/g, '/'));
+    const problems = t.check(await checkDependencies(dir, all)).filter((x) => x !== true);
+    log(problems.length === 0, t.name, problems.map((p) => `    ${p}`).join('\n'));
+  } catch (e) {
+    log(false, t.name, `    오류: ${e.message}`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

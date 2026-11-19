@@ -55,6 +55,12 @@ AI 서비스에서 자주 생기는 문제를 [OWASP Top 10 for LLM Applications
 | AI 응답의 HTML 삽입 (LLM05) | AI 응답을 보여 주는 화면의 `dangerouslySetInnerHTML`, `innerHTML` |
 | AI 호출 횟수·비용 제한 (LLM10) | AI를 부르는 서버의 요청 횟수 제한, 로그인 확인, 입력 길이 제한 |
 | 문자열을 코드로 실행 | `eval`, `new Function` |
+| Supabase 테이블 보안 (A01) | SQL 마이그레이션에서 RLS가 꺼진 테이블, 조건 없는 쓰기 정책(`using (true)`) |
+| 사용자 입력 주입 (A03) | 사용자 값이 그대로 들어가는 SQL·시스템 명령·파일 경로·서버 요청(SSRF)·리디렉션 |
+| CORS 전체 허용 (A05) | `Access-Control-Allow-Origin: *` |
+| 알려진 취약점이 있는 패키지 (A06) | `package-lock.json`·`requirements.txt`의 정확한 버전을 [OSV](https://osv.dev) 공개 취약점 DB와 대조. 다른 패키지 안에 들어 있는 복사본이면 바깥 패키지를 올리라고 안내 |
+
+의존성 취약점 점검은 인터넷이 필요하고 취약점 DB가 날마다 바뀌어서, 스냅숏 테스트 대신 오래전에 알려진 취약점(lodash 4.17.15)으로 따로 확인해요.
 
 찾은 비밀키는 앞 6자리와 길이만 보여 줘요.
 

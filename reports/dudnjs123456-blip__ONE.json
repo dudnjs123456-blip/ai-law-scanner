@@ -1,14 +1,14 @@
 {
   "meta": {
     "repo": "https://github.com/dudnjs123456-blip/ONE",
-    "commit": "dcd75b8",
-    "commitMsg": "feat: 집안일 — 샤워 · 양치 · 설거지 · 빨래(세탁기 → 널기 → 개기)",
-    "commitDate": "2026-11-17",
-    "scannedAt": "2026-11-18",
-    "scanner": "0.4"
+    "commit": "03fae16",
+    "commitMsg": "feat: 샤워할 때 목욕 가운을 입고 머리에 수건을 두른다",
+    "commitDate": "2026-11-19",
+    "scannedAt": "2026-11-19",
+    "scanner": "0.5"
   },
-  "files": 378,
-  "sourceFiles": 215,
+  "files": 383,
+  "sourceFiles": 217,
   "sites": [
     {
       "file": "src/app/api/npc-chat/route.ts",
@@ -47,7 +47,7 @@
   "devAssets": [
     {
       "tool": "Firefly",
-      "count": 10,
+      "count": 11,
       "evidence": [
         {
           "file": "scripts/process-fabric-textures.mjs",
@@ -385,6 +385,44 @@
       ]
     },
     {
+      "id": "rls",
+      "owasp": "A01",
+      "title": "Supabase 테이블 보안(RLS)",
+      "s": "ok",
+      "why": "테이블 2개 모두 RLS가 켜져 있고, 조건 없는 쓰기 정책이 없어요.",
+      "fix": [],
+      "evidence": [
+        {
+          "file": "supabase/migrations/0001_profiles.sql",
+          "line": 5,
+          "code": "create table if not exists public.profiles ("
+        },
+        {
+          "file": "supabase/migrations/0001_profiles.sql",
+          "line": 19,
+          "code": "create table if not exists public.boss_clears ("
+        }
+      ]
+    },
+    {
+      "id": "injection",
+      "owasp": "A03",
+      "title": "사용자 입력 주입",
+      "s": "lo",
+      "why": "사용자가 보낸 값이 SQL·명령어·파일 경로·서버 요청에 바로 쓰이는 곳을 찾지 못했어요.",
+      "fix": [],
+      "evidence": []
+    },
+    {
+      "id": "cors",
+      "owasp": "A05",
+      "title": "CORS 전체 허용",
+      "s": "lo",
+      "why": "CORS를 모든 사이트에 여는 설정을 찾지 못했어요.",
+      "fix": [],
+      "evidence": []
+    },
+    {
       "id": "dynamic-code",
       "owasp": "A03",
       "title": "문자열을 코드로 실행",
@@ -392,6 +430,51 @@
       "why": "eval이나 new Function을 쓰는 곳이 없어요.",
       "fix": [],
       "evidence": []
+    },
+    {
+      "id": "dependencies",
+      "owasp": "A06",
+      "title": "알려진 취약점이 있는 패키지",
+      "s": "hi",
+      "why": "패키지 464개 중 3개에 알려진 취약점 6개가 있어요. 개발용 표시가 없는 패키지에 심각도 높음 이상이 2건 있어요. 빌드에만 쓰이는지, 실제 서비스에서 사용자 입력을 다루는지에 따라 실제 위험은 달라요.",
+      "fix": [
+        "취약한 패키지 일부는 next, @typescript-eslint/typescript-estree 안에 들어 있는 복사본이에요. 그 패키지를 최신 버전으로 올려야 고쳐져요",
+        "npm audit fix 로 자동으로 올릴 수 있는 것부터 올리기",
+        "\"고쳐짐\" 버전 이상으로 올린 뒤 기능 테스트하기",
+        "개발용 패키지는 서비스에 포함되지 않으면 우선순위를 낮춰도 돼요"
+      ],
+      "evidence": [
+        {
+          "file": "package-lock.json",
+          "line": 0,
+          "code": "postcss@8.4.31 (next 안에 포함) — GHSA-6g55-p6wh-862q [높음] PostCSS: Arbitrary file read and information disclosure via attacker-controlled sourceMapp → 8.5.12 에서 고쳐짐"
+        },
+        {
+          "file": "package-lock.json",
+          "line": 0,
+          "code": "postcss@8.4.31 (next 안에 포함) — GHSA-r28c-9q8g-f849 [높음] PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Ar → 8.5.18 에서 고쳐짐"
+        },
+        {
+          "file": "package-lock.json",
+          "line": 0,
+          "code": "postcss@8.4.31 (next 안에 포함) — GHSA-fxqj-rqcc-2cmp [보통] PostCSS: incomplete fix of GHSA-6g55-p6wh-862q — attacker-controlled sourceMappingURL read → 8.5.23 에서 고쳐짐"
+        },
+        {
+          "file": "package-lock.json",
+          "line": 0,
+          "code": "postcss@8.4.31 (next 안에 포함) — GHSA-qx2v-qp2m-jg93 [보통] PostCSS has XSS via Unescaped </style> in its CSS Stringify Output → 8.5.10 에서 고쳐짐"
+        },
+        {
+          "file": "package-lock.json",
+          "line": 0,
+          "code": "minimatch@10.2.6 (@typescript-eslint/typescript-estree 안에 포함) (개발용) — GHSA-g3hv-75wg-m249 [보통] minimatch has potential denial of service via globparts amplification → 11.0.1 에서 고쳐짐"
+        },
+        {
+          "file": "package-lock.json",
+          "line": 0,
+          "code": "esbuild@0.23.1 (개발용) — GHSA-67mh-4wv8-2f99 [보통] esbuild enables any website to send any requests to the development server and read the re → 0.25.0 에서 고쳐짐"
+        }
+      ]
     }
   ]
 }

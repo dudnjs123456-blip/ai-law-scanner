@@ -39,6 +39,41 @@ const INPUT_LIMIT = /\.slice\(\s*-?\d|max_tokens|maxTokens|MAX_[A-Z_]*(?:LEN|LEN
 const RAW_HTML = /dangerouslySetInnerHTML|\.innerHTML\s*=|\bv-html\b|\{@html\b/;
 const DYNAMIC_CODE = /\beval\s*\(|new\s+Function\s*\(/;
 
+// 사용자 입력이 위험한 곳으로 바로 들어가는 모양 (같은 줄 기준)
+const REQ = String.raw`(?:body|req|request|params|query|searchParams|formData|input)\b`;
+const INJECTIONS = [
+  ['SQL 주입', 'hi', new RegExp(String.raw`\b(?:query|execute|raw|\$queryRawUnsafe|\$executeRawUnsafe|unsafe)\s*\(\s*\x60[^\x60]*\$\{[^}]*${REQ}`)],
+  ['SQL 주입', 'hi', new RegExp(String.raw`\b(?:query|execute|raw)\s*\(\s*['"][^'"]*['"]\s*\+\s*${REQ}`)],
+  ['명령어 주입', 'hi', new RegExp(String.raw`\b(?:exec|execSync|spawn|spawnSync|execFile)\s*\(\s*(?:\x60[^\x60]*\$\{[^}]*${REQ}|[^,)]*\+\s*${REQ})`)],
+  ['경로 조작', 'mid', new RegExp(String.raw`\b(?:readFile|readFileSync|createReadStream|writeFile|writeFileSync|unlink|sendFile|rmSync)\s*\([^)]*${REQ}`)],
+  ['서버 요청 위조(SSRF)', 'mid', new RegExp(String.raw`\bfetch\s*\(\s*(?:\x60\$\{\s*)?${REQ}`)],
+  ['열린 리디렉션', 'mid', new RegExp(String.raw`\bredirect\s*\(\s*${REQ}`)],
+];
+const CORS_ANY = /Access-Control-Allow-Origin['"]?\s*[,:]\s*['"]\*['"]|\borigin\s*:\s*['"]\*['"]/;
+const SUPABASE = /@supabase\/supabase-js|@supabase\/ssr|createClient\s*\(/;
+
+/** SQL 마이그레이션에서 테이블·RLS·정책을 읽는다 */
+function readSupabaseSql(sqlFiles) {
+  const tables = new Map(); // 이름 → 처음 만든 위치
+  const rls = new Set();
+  const loose = [];
+  for (const f of sqlFiles) {
+    const clean = f.raw.replace(/--[^\n]*/g, (m) => ' '.repeat(m.length));
+    for (const m of clean.matchAll(/create\s+table\s+(?:if\s+not\s+exists\s+)?(?:"?(\w+)"?\.)?"?(\w+)"?/gi)) {
+      if (m[1] && m[1].toLowerCase() !== 'public') continue; // auth·storage 같은 다른 스키마는 Supabase 가 관리한다
+      const name = m[2].toLowerCase();
+      if (!tables.has(name)) tables.set(name, { file: f.rel, line: lineOf(clean, m.index), code: lineText(f.raw, lineOf(clean, m.index)) });
+    }
+    for (const m of clean.matchAll(/alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(?:"?public"?\.)?"?(\w+)"?\s+enable\s+row\s+level\s+security/gi)) rls.add(m[1].toLowerCase());
+    // 쓰기(insert·update·delete·all) 정책이 조건 없이 true 면 누구나 고칠 수 있다
+    for (const m of clean.matchAll(/create\s+policy\s+(?:"[^"]*"|\w+)\s+on\s+(?:"?public"?\.)?"?(\w+)"?([\s\S]*?);/gi)) {
+      const cmd = (m[2].match(/\bfor\s+(select|insert|update|delete|all)\b/i)?.[1] ?? 'all').toLowerCase();
+      if (cmd !== 'select' && /(?:using|with\s+check)\s*\(\s*true\s*\)/i.test(m[2])) loose.push({ file: f.rel, line: lineOf(clean, m.index), code: lineText(f.raw, lineOf(clean, m.index)), table: m[1].toLowerCase(), cmd });
+    }
+  }
+  return { tables, rls, loose };
+}
+
 const lineOf = (text, idx) => text.slice(0, idx).split('\n').length;
 const lineText = (raw, n) => (raw.split('\n')[n - 1] ?? '').trim().slice(0, 160);
 
@@ -134,7 +169,35 @@ export function judgeSecurity({ root, all, src, appSrc, byRel, importsOf, sites 
       ['사용자·IP별로 1분당 요청 횟수 제한하기', 'AI 회사 대시보드에서 월 사용 한도 걸기', '화면 쪽 제한은 우회할 수 있으니 서버에서 제한하기'], [...serverSites.map((s) => ({ file: s.file, line: s.line, code: s.code })), ...sized.slice(0, 2)]);
   } else item('consumption', 'LLM10', 'AI 호출 횟수·비용 제한', 'lo', '서버에서 AI를 부르는 코드가 없어요.');
 
-  // 6) 위험한 코드 실행
+  // 6) Supabase 테이블 보안(RLS): 브라우저에 공개되는 키로 데이터베이스에 바로 접근하므로 RLS 가 꺼져 있으면 누구나 읽고 쓴다
+  const sqlFiles = all.filter((r) => /\.sql$/i.test(r)).map((rel) => { try { const full = path.join(root, rel); return fs.statSync(full).size <= 1_000_000 ? { rel, raw: fs.readFileSync(full, 'utf8') } : null; } catch { return null; } }).filter(Boolean);
+  const usesSupabase = appSrc.some((f) => SUPABASE.test(f.code) && /supabase/i.test(f.code));
+  const db = readSupabaseSql(sqlFiles);
+  const open = [...db.tables.entries()].filter(([name]) => !db.rls.has(name));
+  if (open.length) item('rls', 'A01', 'Supabase 테이블 보안(RLS)', 'hi', `RLS가 켜져 있지 않은 테이블이 ${open.length}개 있어요 (${open.map(([n]) => n).join(', ')}). 브라우저에 공개되는 키만으로 누구나 이 테이블을 읽고 고칠 수 있어요.`,
+    ['테이블마다 "alter table … enable row level security" 추가하기', '본인 데이터만 읽고 쓰도록 auth.uid() 로 정책 만들기'], open.map(([, at]) => at));
+  else if (db.loose.length) item('rls', 'A01', 'Supabase 테이블 보안(RLS)', 'mid', `RLS는 켜져 있지만, 조건 없이 누구나 고칠 수 있는 정책이 ${db.loose.length}개 있어요 (${db.loose.map((p) => `${p.table} ${p.cmd}`).join(', ')}).`,
+    ['쓰기 정책의 using(true)·with check(true) 를 auth.uid() 조건으로 바꾸기'], db.loose);
+  else if (db.tables.size) item('rls', 'A01', 'Supabase 테이블 보안(RLS)', 'ok', `테이블 ${db.tables.size}개 모두 RLS가 켜져 있고, 조건 없는 쓰기 정책이 없어요.`, [], [...db.tables.values()].slice(0, 3));
+  else if (usesSupabase) item('rls', 'A01', 'Supabase 테이블 보안(RLS)', 'ask', 'Supabase를 쓰지만 저장소에 테이블을 만드는 SQL이 없어요. 대시보드에서 테이블마다 RLS가 켜져 있는지 확인해야 해요.', ['Supabase 대시보드 → Table Editor 에서 테이블마다 RLS 켜짐 확인하기', '테이블 정의를 supabase/migrations 에 SQL 로 남겨 두기']);
+  else item('rls', 'A01', 'Supabase 테이블 보안(RLS)', 'lo', 'Supabase를 쓰지 않아요.');
+
+  // 7) 사용자 입력 주입 (SQL·명령어·경로·서버 요청·리디렉션)
+  const inj = [];
+  for (const f of appSrc) f.code.split('\n').forEach((l, i) => {
+    for (const [kind, sev, re] of INJECTIONS) if (re.test(l)) { inj.push({ kind, sev, file: f.rel, line: i + 1, code: `[${kind}] ${lineText(f.raw, i + 1)}` }); break; }
+  });
+  if (inj.length) item('injection', 'A03', '사용자 입력 주입', inj.some((x) => x.sev === 'hi') ? 'hi' : 'mid', `사용자가 보낸 값이 그대로 ${[...new Set(inj.map((x) => x.kind))].join('·')}에 쓰이는 곳이 ${inj.length}곳 있어요. 값을 조작하면 데이터베이스·서버 명령·파일·내부 주소에 접근할 수 있어요.`,
+    ['SQL 은 값을 문자열로 이어 붙이지 말고 자리표시자(파라미터)로 넘기기', '명령어 실행은 사용자 값을 쓰지 않거나 허용 목록으로 제한하기', '파일 경로·요청 주소·이동 주소는 허용된 값인지 서버에서 확인하기'], inj);
+  else item('injection', 'A03', '사용자 입력 주입', 'lo', '사용자가 보낸 값이 SQL·명령어·파일 경로·서버 요청에 바로 쓰이는 곳을 찾지 못했어요.');
+
+  // 8) CORS 전체 허용
+  const cors = appSrc.flatMap((f) => findLines(f, CORS_ANY));
+  if (cors.length) item('cors', 'A05', 'CORS 전체 허용', 'mid', '모든 사이트에서 이 서버의 API를 부를 수 있게 열려 있어요(Access-Control-Allow-Origin: *). 로그인 정보를 쓰는 API라면 다른 사이트가 이용자 대신 요청을 보낼 수 있어요.',
+    ['허용할 사이트 주소만 적기', '로그인이 필요 없는 공개 API인지 확인하기'], cors);
+  else item('cors', 'A05', 'CORS 전체 허용', 'lo', 'CORS를 모든 사이트에 여는 설정을 찾지 못했어요.');
+
+  // 9) 위험한 코드 실행
   const dyn = appSrc.flatMap((f) => findLines(f, DYNAMIC_CODE));
   if (dyn.length) item('dynamic-code', 'A03', '문자열을 코드로 실행', 'mid', 'eval이나 new Function으로 문자열을 코드로 실행하는 곳이 있어요. 그 문자열에 사용자 입력이나 AI 응답이 섞이면 원격 코드 실행으로 이어질 수 있어요.',
     ['문자열 실행 대신 JSON.parse나 미리 정한 함수 표 쓰기'], dyn);

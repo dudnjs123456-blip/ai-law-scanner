@@ -19,6 +19,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { judgeSecurity, needsSecurityContent } from './security.mjs';
+import { checkDependencies } from './deps.mjs';
 
 // ───────────────────────── 설정 ─────────────────────────
 
@@ -27,7 +28,7 @@ const SRC_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.
 const MAX_BYTES = 1_000_000;
 
 /** 내용을 읽어야 하는 파일인가 (나머지는 이름만 본다) */
-export const needsContent = (rel) => SRC_EXT.has(path.extname(rel).toLowerCase()) || /(^|\/)(package\.json|requirements[^/]*\.txt|pyproject\.toml)$/.test(rel) || needsSecurityContent(rel);
+export const needsContent = (rel) => SRC_EXT.has(path.extname(rel).toLowerCase()) || /(^|\/)(package\.json|package-lock\.json|requirements[^/]*\.txt|pyproject\.toml)$/.test(rel) || /\.sql$/i.test(rel) || needsSecurityContent(rel);
 
 /** 생성형 AI SDK·API. 모두 해외 회사 서버로 데이터가 나간다 */
 const SDKS = [
@@ -230,6 +231,13 @@ export function scan(root) {
   return ev;
 }
 
+/** scan() + 인터넷이 필요한 점검(의존성 취약점). 서버와 CLI 가 쓴다 */
+export async function scanFull(root) {
+  const ev = scan(root);
+  ev.security.push(await checkDependencies(root, walk(root)));
+  return ev;
+}
+
 // ───────────────────────── 법령별 판정 ─────────────────────────
 // s: hi 위반 가능성 높음 · mid 검토 필요 · ask 확인 필요(코드로 알 수 없음) · ok 조치 확인됨 · lo 해당 가능성 낮음
 
@@ -378,7 +386,7 @@ if (process.argv[1]?.replace(/\\/g, '/').endsWith('scan.mjs')) {
   try {
     if (/^(https:\/\/|git@)/.test(target)) { console.error('저장소를 내려받는 중… (코드는 실행하지 않아요)'); ({ dir: tmp, root } = cloneRepo(target)); }
     if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) throw new Error(`폴더를 찾을 수 없어요: ${root}`);
-    const ev = scan(root);
+    const ev = await scanFull(root);
     const c = commitOf(root);
     const r = { meta: { repo: target.replace(/\.git$/, ''), commit: c?.[0] ?? null, commitMsg: c?.[1] ?? null, commitDate: c?.[2] ?? null, scannedAt: new Date().toISOString().slice(0, 10), scanner: '0.2' }, ...ev };
     printText(r);
