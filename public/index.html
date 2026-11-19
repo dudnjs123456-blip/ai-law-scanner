@@ -155,6 +155,21 @@ textarea.copybox{width:100%;min-height:120px;font-family:var(--f-mono);font-size
 
 footer{border-top:1px solid var(--line);padding-top:16px;color:var(--muted);font-size:13px;display:flex;flex-direction:column;gap:6px;max-width:760px}
 footer p{margin:0}
+/* 보안 뉴스 */
+.newsbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.newsbar .chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--surface)}
+.newsbar .sep{width:1px;height:20px;background:var(--line);margin-inline:4px}
+.newsmeta{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between}
+.news{list-style:none;margin:0;padding:0}
+.news li{padding:14px 16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:4px;min-width:0}
+.news li:first-child{border-top:0}
+.news a.t{color:var(--ink);font-weight:500;text-decoration:none;overflow-wrap:anywhere}
+.news a.t:hover{color:var(--accent);text-decoration:underline}
+.news .m{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12.5px;color:var(--muted);align-items:center}
+.news .s{color:var(--muted);font-size:13.5px;margin:0;overflow-wrap:anywhere}
+.news .tag{font-size:12px;border-radius:4px;padding:0 6px;background:var(--accent-soft);color:var(--accent)}
+.news .tag.sev{background:var(--hi-soft);color:var(--hi)}
+.srcs{font-size:12.5px;color:var(--muted)} .srcs .bad{color:var(--hi)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -170,6 +185,7 @@ footer p{margin:0}
     <a href="#laws" data-tab="laws">AI 법령 모음</a>
     <a href="#code" data-tab="code">코드 진단</a>
     <a href="#survey" data-tab="survey">질문으로 진단</a>
+    <a href="#news" data-tab="news">보안 뉴스</a>
   </nav>
 
   <!-- ───────── 코드 진단 ───────── -->
@@ -272,6 +288,23 @@ footer p{margin:0}
   <section class="panel" id="tab-laws" hidden>
     <p class="note">AI 서비스와 관련된 국내외 법령과 정부 가이드라인 <b id="lawCount"></b>개를 정리했어요. 각 항목에 코드 진단으로 어디까지 확인할 수 있는지 적어 두었어요. 법령은 계속 바뀌니, 실제로 적용하기 전에는 원문을 꼭 확인하세요.</p>
     <div id="lawList" class="panel"></div>
+  </section>
+
+  <!-- ───────── 보안 뉴스 ───────── -->
+  <section class="panel" id="tab-news" hidden>
+    <p class="note">국내외 보안 뉴스, KISA 보호나라 공지, GitHub 보안 권고와 악성 패키지 신고를 한곳에 모았어요. 30분마다 새 소식을 가져와요. 주제는 제목과 요약의 낱말로 자동 분류해서 가끔 틀릴 수 있어요.</p>
+    <div class="newsbar" id="newsTopics" role="group" aria-label="주제"></div>
+    <div class="newsbar" id="newsLang" role="group" aria-label="출처 지역">
+      <button type="button" class="chip" data-lang="" aria-pressed="true">전체</button>
+      <button type="button" class="chip" data-lang="ko" aria-pressed="false">국내</button>
+      <button type="button" class="chip" data-lang="en" aria-pressed="false">해외</button>
+      <span class="sep" aria-hidden="true"></span>
+      <label class="status" for="newsQ" hidden>검색</label>
+      <input id="newsQ" type="search" placeholder="검색 (예: npm, CVE, 프롬프트)" autocomplete="off" style="flex:1 1 200px;min-width:0;font:inherit;font-size:13.5px;padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)">
+    </div>
+    <div class="newsmeta"><span class="status" id="newsStatus">불러오는 중이에요.</span><button type="button" class="btn-ghost" id="newsReload">새로고침</button></div>
+    <div class="box"><ul class="news" id="newsList"></ul></div>
+    <p class="srcs" id="newsSources"></p>
   </section>
 
   <footer>
@@ -465,12 +498,63 @@ footer p{margin:0}
     </section>`).join('');
 
   // ───────── 탭 ─────────
-  const TABS = ['code','survey','laws'];
+  const TABS = ['code','survey','laws','news'];
   function showTab(){
     const t = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'code';
     for (const k of TABS) { $('#tab-'+k).hidden = k !== t; const a = $(`[data-tab="${k}"]`); if (k===t) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current'); }
   }
   addEventListener('hashchange', showTab); showTab();
+
+  // ───────── 보안 뉴스 ─────────
+  const news = { data: null, topic: '', lang: '', q: '', loading: false, timer: null };
+  const ago = iso => {
+    if (!iso) return '';
+    const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+    if (m < 1) return '방금'; if (m < 60) return m + '분 전';
+    const hr = Math.round(m / 60); if (hr < 24) return hr + '시간 전';
+    const d = Math.round(hr / 24); return d < 8 ? d + '일 전' : new Date(iso).toLocaleDateString('ko-KR');
+  };
+  const SEV = { critical:'위험 매우 높음', high:'위험 높음' };
+  function renderNews(){
+    const d = news.data; if (!d) return;
+    const label = Object.fromEntries(d.topics.map(t => [t.id, t.label]));
+    const byLang = d.items.filter(i => !news.lang || i.lang === news.lang);
+    $('#newsTopics').innerHTML = [['', '전체', byLang.length], ...d.topics.map(t => [t.id, t.label, byLang.filter(i => i.topics.includes(t.id)).length])]
+      .map(([id, l, n]) => `<button type="button" class="chip" data-topic="${id}" aria-pressed="${news.topic === id}">${h(l)} ${n}</button>`).join('');
+    const q = news.q.trim().toLowerCase();
+    const list = byLang.filter(i => (!news.topic || i.topics.includes(news.topic)) && (!q || (i.title + ' ' + i.summary + ' ' + i.sourceName).toLowerCase().includes(q)));
+    $('#newsList').innerHTML = list.length ? list.slice(0, 200).map(i => `<li>
+      <a class="t" href="${h(i.url)}" target="_blank" rel="noopener noreferrer">${h(i.title)}</a>
+      ${i.summary ? `<p class="s">${h(i.summary)}</p>` : ''}
+      <div class="m"><span>${h(i.sourceName)}</span><time datetime="${h(i.date)}" title="${i.date ? h(new Date(i.date).toLocaleString('ko-KR')) : ''}">${h(ago(i.date))}</time>${SEV[i.severity] ? `<span class="tag sev">${SEV[i.severity]}</span>` : ''}${i.topics.map(t => `<span class="tag">${h(label[t])}</span>`).join('')}</div>
+    </li>`).join('') : '<li class="note">조건에 맞는 소식이 없어요.</li>';
+    $('#newsStatus').textContent = `${list.length}건 · 마지막 수집 ${ago(d.updatedAt)} (${new Date(d.updatedAt).toLocaleString('ko-KR')})`;
+    $('#newsSources').innerHTML = '출처 ' + d.sources.map(s => s.ok ? `${h(s.name)} ${s.count}` : `<span class="bad" title="${h(s.error)}">${h(s.name)} 불러오기 실패</span>`).join(' · ');
+  }
+  async function loadNews(){
+    if (news.loading) return; news.loading = true;
+    $('#newsReload').disabled = true;
+    if (!news.data) $('#newsStatus').textContent = '불러오는 중이에요.';
+    try {
+      const r = await fetch('/api/news', { cache: 'no-cache' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      news.data = await r.json(); renderNews();
+    } catch (e) {
+      $('#newsStatus').textContent = news.data ? '새 소식을 가져오지 못했어요. 이전 목록을 보여드려요.' : '보안 뉴스를 불러오지 못했어요. 잠시 뒤 새로고침해 주세요.';
+    } finally { news.loading = false; $('#newsReload').disabled = false; }
+  }
+  $('#newsTopics').addEventListener('click', e => { const b = e.target.closest('[data-topic]'); if (!b) return; news.topic = b.dataset.topic; renderNews(); });
+  $('#newsLang').addEventListener('click', e => { const b = e.target.closest('[data-lang]'); if (!b) return; news.lang = b.dataset.lang; for (const x of $('#newsLang').querySelectorAll('[data-lang]')) x.setAttribute('aria-pressed', x === b); renderNews(); });
+  $('#newsQ').addEventListener('input', e => { news.q = e.target.value; renderNews(); });
+  $('#newsReload').addEventListener('click', loadNews);
+  // 탭을 열 때 처음 불러오고, 열려 있는 동안 10분마다 확인한다 (서버는 30분마다 새로 모음)
+  function newsTabWatch(){
+    const on = location.hash === '#news';
+    if (on && !news.data) loadNews();
+    if (on && !news.timer) news.timer = setInterval(() => { if (!document.hidden) loadNews(); }, 600000);
+    if (!on && news.timer) { clearInterval(news.timer); news.timer = null; }
+  }
+  addEventListener('hashchange', newsTabWatch); newsTabWatch();
 
   // ───────── 코드 진단 ─────────
   const STATUS = { hi:'위반 가능성 높음', mid:'검토 필요', ask:'확인 필요', ok:'조치 확인됨', lo:'해당 가능성 낮음' };
