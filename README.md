@@ -85,6 +85,7 @@ AI 서비스에서 자주 생기는 문제를 [OWASP Top 10 for LLM Applications
   - 지금 뉴스 목록에 있는 기사만 요약해요(아무 주소나 대신 받아 주지 않게). 같은 기사는 하루 동안 CDN에 저장돼 다시 요약하지 않아요.
   - 본문을 받을 수 없는 사이트(The Hacker News는 봇 접근 차단)는 피드에 실린 글로 요약해요. GitHub 권고는 권고 설명과 고친 버전을 써요.
   - 나중에 자체 LLM으로 바꾸려면 `lib/summarize.mjs`의 `ENGINES`에 엔진을 추가하고 `SUMMARY_ENGINE` 환경변수로 고르면 돼요.
+- **영어 글 한국어로 보기**는 브라우저 내장 번역(Chrome Translator API)을 써요. 방문자 컴퓨터 안에서 번역해서 서버 비용이 없고 글이 밖으로 나가지 않아요. PC용 최신 Chrome에서만 되고, 다른 브라우저에서는 영어 글마다 "구글 번역으로 읽기" 링크를 보여 줘요. 처음 한 번은 번역 모델을 내려받아요. 나중에 자체 모델로 바꾸려면 `public/index.html`의 `ENGINE`만 바꾸면 돼요.
 - 보안뉴스(boannews.com)는 RSS 주소가 일반 웹페이지로 바뀌어 있어 빠져 있어요.
 
 ## Vercel에 배포
