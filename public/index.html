@@ -161,14 +161,20 @@ footer p{margin:0}
 .newsbar .sep{width:1px;height:20px;background:var(--line);margin-inline:4px}
 .newsmeta{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between}
 .news{list-style:none;margin:0;padding:0}
-.news li{padding:14px 16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:4px;min-width:0}
-.news li:first-child{border-top:0}
+.news > li{padding:14px 16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:4px;min-width:0}
+.news > li:first-child{border-top:0}
 .news a.t{color:var(--ink);font-weight:500;text-decoration:none;overflow-wrap:anywhere}
 .news a.t:hover{color:var(--accent);text-decoration:underline}
 .news .m{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12.5px;color:var(--muted);align-items:center}
 .news .s{color:var(--muted);font-size:13.5px;margin:0;overflow-wrap:anywhere}
 .news .tag{font-size:12px;border-radius:4px;padding:0 6px;background:var(--accent-soft);color:var(--accent)}
 .news .tag.sev{background:var(--hi-soft);color:var(--hi)}
+.news .sumbtn{align-self:flex-start;margin-top:4px}
+.news .sum{margin-top:6px;border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 8px 8px 0;padding:10px 14px;display:flex;flex-direction:column;gap:6px;font-size:13.5px}
+.news .sum ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.news .sum .act{margin:0;padding:6px 10px;border-radius:6px;background:var(--surface);border:1px solid var(--line)}
+.news .sum .act b{color:var(--accent)}
+.news .sum .from{font-size:12px;color:var(--muted);margin:0}
 .srcs{font-size:12.5px;color:var(--muted)} .srcs .bad{color:var(--hi)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -506,7 +512,33 @@ footer p{margin:0}
   addEventListener('hashchange', showTab); showTab();
 
   // ───────── 보안 뉴스 ─────────
-  const news = { data: null, topic: '', lang: '', q: '', loading: false, timer: null };
+  const news = { data: null, topic: '', lang: '', q: '', loading: false, timer: null, open: new Set(), sums: new Map() };
+  const FROM = { article:'기사 본문에서 중요한 문장을 골랐어요.', feed:'기사 본문을 받을 수 없어서 소개글에서 골랐어요.', advisory:'GitHub 보안 권고 설명에서 골랐어요.' };
+  function sumHtml(url){
+    const s = news.sums.get(url);
+    if (!s) return '<p class="from">요약하는 중이에요.</p>';
+    if (s.error) return `<p class="from">${h(s.error)}</p>`;
+    return `<ul>${s.points.map(p => `<li>${h(p)}</li>`).join('')}</ul>
+      ${s.action ? `<p class="act"><b>해야 할 일</b> ${h(s.action)}</p>` : ''}
+      ${s.cves?.length ? `<p class="from">관련 CVE: ${s.cves.map(h).join(', ')}</p>` : ''}
+      <p class="from">${FROM[s.from] ?? ''} AI가 새로 쓴 요약이 아니라 원문 문장 그대로예요.</p>`;
+  }
+  async function toggleSum(btn){
+    const url = btn.dataset.sum, box = btn.nextElementSibling;
+    if (news.open.has(url)) { news.open.delete(url); box.hidden = true; btn.textContent = '핵심 요약'; btn.setAttribute('aria-expanded','false'); return; }
+    news.open.add(url); box.hidden = false; btn.textContent = '요약 접기'; btn.setAttribute('aria-expanded','true');
+    // 실패했던 요약은 다시 열 때 새로 시도한다
+    if (news.sums.get(url)?.error) news.sums.delete(url);
+    box.innerHTML = sumHtml(url);
+    if (news.sums.has(url)) return;
+    try {
+      const r = await fetch('/api/summary?url=' + encodeURIComponent(url));
+      const j = await r.json().catch(() => ({}));
+      news.sums.set(url, r.ok ? j : { error: j.error || '요약을 만들지 못했어요. 원문 링크로 확인해 주세요.' });
+    } catch { news.sums.set(url, { error: '요약을 불러오지 못했어요. 잠시 뒤 다시 눌러 주세요.' }); }
+    // 그사이 목록이 다시 그려졌을 수 있으니 지금 화면의 상자를 찾아 채운다
+    for (const b of document.querySelectorAll('#newsList [data-sum]')) if (b.dataset.sum === url && news.open.has(url)) b.nextElementSibling.innerHTML = sumHtml(url);
+  }
   const ago = iso => {
     if (!iso) return '';
     const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
@@ -526,6 +558,7 @@ footer p{margin:0}
     $('#newsList').innerHTML = list.length ? list.slice(0, 200).map(i => `<li>
       <a class="t" href="${h(i.url)}" target="_blank" rel="noopener noreferrer">${h(i.title)}</a>
       ${i.summary ? `<p class="s">${h(i.summary)}</p>` : ''}
+      ${i.summarizable ? `<button type="button" class="btn-ghost sumbtn" data-sum="${h(i.url)}" aria-expanded="${news.open.has(i.url)}">${news.open.has(i.url) ? '요약 접기' : '핵심 요약'}</button><div class="sum" ${news.open.has(i.url) ? '' : 'hidden'}>${sumHtml(i.url)}</div>` : ''}
       <div class="m"><span>${h(i.sourceName)}</span><time datetime="${h(i.date)}" title="${i.date ? h(new Date(i.date).toLocaleString('ko-KR')) : ''}">${h(ago(i.date))}</time>${SEV[i.severity] ? `<span class="tag sev">${SEV[i.severity]}</span>` : ''}${i.topics.map(t => `<span class="tag">${h(label[t])}</span>`).join('')}</div>
     </li>`).join('') : '<li class="note">조건에 맞는 소식이 없어요.</li>';
     $('#newsStatus').textContent = `${list.length}건 · 마지막 수집 ${ago(d.updatedAt)} (${new Date(d.updatedAt).toLocaleString('ko-KR')})`;
@@ -547,6 +580,7 @@ footer p{margin:0}
   $('#newsLang').addEventListener('click', e => { const b = e.target.closest('[data-lang]'); if (!b) return; news.lang = b.dataset.lang; for (const x of $('#newsLang').querySelectorAll('[data-lang]')) x.setAttribute('aria-pressed', x === b); renderNews(); });
   $('#newsQ').addEventListener('input', e => { news.q = e.target.value; renderNews(); });
   $('#newsReload').addEventListener('click', loadNews);
+  $('#newsList').addEventListener('click', e => { const b = e.target.closest('[data-sum]'); if (b) toggleSum(b); });
   // 탭을 열 때 처음 불러오고, 열려 있는 동안 10분마다 확인한다 (서버는 30분마다 새로 모음)
   function newsTabWatch(){
     const on = location.hash === '#news';

@@ -13,6 +13,7 @@
 | `scan.mjs` | 진단 엔진. 규칙과 법령별 판정이 모두 여기 있어요 |
 | `app/api/scan/route.js` | 진단 서버. GitHub에서 코드를 받아 `scan.mjs`로 진단해요 |
 | `app/api/news/route.js`, `lib/news.mjs` | 보안 뉴스. 출처 8곳을 30분마다 모아 최신순으로 합쳐요 |
+| `app/api/summary/route.js`, `lib/summarize.mjs` | 기사 핵심 요약. 본문에서 중요한 문장 3개와 '해야 할 일'을 골라요 |
 | `public/index.html` | 화면. 법령 모음, 코드 진단, 질문으로 진단, 보안 뉴스 탭 |
 | `public/reports/example.json` | 첫 화면에 보여주는 예시 결과 (투게더 게임) |
 | `fixtures/` | 진단 엔진 테스트용 코드 |
@@ -80,6 +81,10 @@ AI 서비스에서 자주 생기는 문제를 [OWASP Top 10 for LLM Applications
 - 주제(AI 보안·공급망·취약점·해킹·법/정책)는 제목과 요약의 낱말로 자동 분류해요. 출처 추가와 분류 낱말은 `lib/news.mjs` 맨 위 `SOURCES`, `TOPICS`에서 고쳐요.
 - 출처 하나가 실패해도 나머지는 보여 주고, 화면 아래에 실패한 출처를 표시해요.
 - 외부 글은 태그를 지우고 글자만 보여 주며, http(s) 링크만 남겨요.
+- **핵심 요약**(`GET /api/summary?url=`)은 외부 AI 없이 본문에서 문장을 골라요(추출 요약). 낱말이 자주 나오고 제목과 겹치는 문장에 점수를 주고, 조치를 말하는 문장(업데이트·패치·삭제 등)은 '해야 할 일'로 따로 보여 줘요. 문장은 원문 그대로라 영어 기사는 영어로 나와요.
+  - 지금 뉴스 목록에 있는 기사만 요약해요(아무 주소나 대신 받아 주지 않게). 같은 기사는 하루 동안 CDN에 저장돼 다시 요약하지 않아요.
+  - 본문을 받을 수 없는 사이트(The Hacker News는 봇 접근 차단)는 피드에 실린 글로 요약해요. GitHub 권고는 권고 설명과 고친 버전을 써요.
+  - 나중에 자체 LLM으로 바꾸려면 `lib/summarize.mjs`의 `ENGINES`에 엔진을 추가하고 `SUMMARY_ENGINE` 환경변수로 고르면 돼요.
 - 보안뉴스(boannews.com)는 RSS 주소가 일반 웹페이지로 바뀌어 있어 빠져 있어요.
 
 ## Vercel에 배포

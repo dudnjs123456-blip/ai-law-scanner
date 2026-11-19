@@ -11,7 +11,9 @@ export const revalidate = 1800;
 
 export async function GET() {
   const data = await collectNews({ fetchOpts: { next: { revalidate: 1800 } } });
-  return Response.json(data, {
+  // 요약용 원문(desc·patched)은 목록에서 빼서 응답을 가볍게 한다
+  const items = data.items.map(({ desc, patched, ...rest }) => ({ ...rest, summarizable: !rest.group }));
+  return Response.json({ ...data, items }, {
     headers: { 'Cache-Control': 'public, s-maxage=1800, stale-while-revalidate=3600' },
   });
 }
