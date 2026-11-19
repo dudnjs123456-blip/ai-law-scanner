@@ -63,6 +63,8 @@ const DEEPFAKE_HINT = /얼굴|인물|실사|초상|portrait|face ?swap|photoreal
 const REVIEW_HINT = /후기|리뷰|\breviews?\b|testimonial/i;
 const LOGIN = /type=["']password["']|auth\.(?:signUp|signInWithPassword|signInWithOtp|signInWithOAuth)|createUserWithEmailAndPassword|next-auth|@clerk\/|@auth0\//;
 const PRIVACY = /개인정보\s?처리\s?방침|privacy policy|개인정보\s?(?:수집|이용)\s?(?:동의|안내)/i;
+const OVERSEAS = /국외\s*이전|해외\s*이전|(?:미국|해외|국외|일본|중국|유럽|EU)\)?\s*(?:으로|로|에)\s*(?:전송|보내|이전|보관)|cross[- ]border|international (?:data )?transfer|transfers? (?:of personal data )?(?:outside|abroad)/i;
+const INPUT_WARN = /개인정보[^\n]{0,40}(?:입력하지|넣지|적지|쓰지)|(?:do not|don't) (?:enter|share|include) (?:any )?personal/i;
 const TEXT_INPUT = /<(?:input|textarea)\b/;
 const HIGH_IMPACT = [
   ['채용·인사 평가', /채용|이력서|면접\s?평가|resume|candidate|hiring/i],
@@ -226,6 +228,12 @@ export function scan(root) {
     privacy: firstHit(appSrc, PRIVACY) ?? (all.some((f) => /(^|\/)privacy|처리방침/i.test(f)) ? { file: all.find((f) => /(^|\/)privacy|처리방침/i.test(f)), line: 0, code: '(파일)' } : null),
     reviewGen: firstHit(ctxFiles, REVIEW_HINT),
   };
+  // 처리방침 안의 국외 이전 항목 (받는 회사 이름까지 적었는지 보려고 그 파일 내용도 둔다)
+  const policyFiles = appSrc.filter((g) => /(^|\/)privacy|처리방침/i.test(g.rel) || PRIVACY.test(g.code));
+  ev.overseas = firstHit(policyFiles, OVERSEAS);
+  ev.overseasText = ev.overseas ? byRel.get(ev.overseas.file)?.raw ?? '' : '';
+  // AI 입력창 근처의 "개인정보를 입력하지 마세요" 안내
+  for (const st of sites) st.inputWarn = (st.ui ?? []).map((u) => firstHit([byRel.get(u)].filter(Boolean), INPUT_WARN)).find(Boolean) ?? null;
   ev.findings = judge(ev);
   ev.security = judgeSecurity({ root, all, src, appSrc, byRel, importsOf, sites });
   return ev;
@@ -281,7 +289,15 @@ function judge(ev) {
   else if (ev.login) f(P, '제30조', '개인정보 처리방침 공개', 'ok', '로그인 기능과 개인정보 처리방침을 모두 찾았어요.', [], [ev.privacy]);
   else f(P, '제30조', '개인정보 처리방침 공개', 'lo', '코드에서 회원가입·로그인 기능을 찾지 못했어요.');
 
-  if (withInput.length) f(P, '제28조의8', '개인정보 국외 이전 고지', ev.privacy ? 'mid' : 'hi', `이용자가 직접 입력한 글이 해외 AI 회사(${[...new Set(withInput.map((s) => s.sdk))].join(', ')}) 서버로 전송돼요. 이름이나 연락처 같은 개인정보가 섞일 수 있어요.`,
+  const companies = [...new Set(withInput.map((s) => s.sdk.split(/\s+/)[0]))];
+  const named = ev.overseas && companies.every((c) => ev.overseasText.toLowerCase().includes(c.toLowerCase()));
+  const warned = withInput.every((s) => s.inputWarn);
+  if (withInput.length && ev.privacy && named && warned) f(P, '제28조의8', '개인정보 국외 이전 고지', 'ok', `처리방침에 국외 이전 항목(${companies.join(', ')} 포함)이 있고, AI 입력창 근처에 개인정보 입력 주의 안내가 있어요. 나라·보관 기간 같은 세부 내용은 직접 확인하세요.`, [],
+    [ev.overseas, ...withInput.map((s) => s.inputWarn)]);
+  else if (withInput.length && ev.privacy) f(P, '제28조의8', '개인정보 국외 이전 고지', 'mid', `이용자가 직접 입력한 글이 해외 AI 회사(${[...new Set(withInput.map((s) => s.sdk))].join(', ')}) 서버로 전송돼요. ${[named ? '처리방침의 국외 이전 항목은 찾았어요' : ev.overseas ? `처리방침에 국외 이전 항목은 있지만 ${companies.join(', ')} 이름이 없어요` : '처리방침에서 국외 이전 항목을 찾지 못했어요', warned ? '입력창 안내는 있어요' : '입력창 근처에 개인정보 입력 주의 안내가 없어요'].join(', ')}.`,
+    [...(named ? [] : ['처리방침에 국외 이전 항목(받는 회사, 나라, 항목, 목적, 보관 기간) 적기']), ...(warned ? [] : ['입력창에 "개인정보를 입력하지 마세요" 안내 넣기'])],
+    withInput.flatMap((s) => [at(s), s.userInput]).concat(ev.overseas ? [ev.overseas] : []));
+  else if (withInput.length) f(P, '제28조의8', '개인정보 국외 이전 고지', 'hi', `이용자가 직접 입력한 글이 해외 AI 회사(${[...new Set(withInput.map((s) => s.sdk))].join(', ')}) 서버로 전송돼요. 이름이나 연락처 같은 개인정보가 섞일 수 있어요.`,
     ['처리방침에 국외 이전 항목(받는 회사, 나라, 항목, 목적) 적기', '입력창에 "개인정보를 입력하지 마세요" 안내 넣기'], withInput.flatMap((s) => [at(s), s.userInput]));
   else f(P, '제28조의8', '개인정보 국외 이전 고지', live.length ? 'ask' : 'lo', live.length ? '해외 AI로 보내는 데이터에 개인정보가 있는지 확인이 필요해요.' : '해외 AI로 데이터를 보내는 코드가 없어요.');
 

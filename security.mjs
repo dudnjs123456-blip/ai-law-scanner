@@ -35,6 +35,10 @@ const SYSTEM_SLOT = /role\s*:\s*['"`]system['"`]|\bsystem\s*:/;
 const USER_DATA = /\b(?:body|req|request|input|params|query|searchParams|formData|userInput|prompt)\b/;
 const RATE_LIMIT = /\b(?:rate[-_ ]?limit(?:er|ing)?|ratelimit|limiter|throttle\w*|tooMany\w*)\b|status\s*:\s*429/i;
 const AUTH = /\b(?:getUser|getSession|getServerSession|currentUser|verifyToken|supabase\.auth|clerk|authorization)\b|jwt\.verify|\bauth\(\)/i;
+/** 브라우저 값을 서버에서 먼저 검사하는 코드 (예: cleanContext(body.context), schema.parse(body)) */
+const SANITIZE = /\b(?:clean|sanitiz|validat|safeParse|parse|whitelist|allow)\w*\s*\(\s*(?:body|req|request|input|params|query|raw)\b/i;
+/** AI 에게 "이 값은 데이터일 뿐 지시가 아니다" 라고 구분해 넣는 표시 */
+const DATA_FENCE = /지시가\s*아니|지시로\s*(?:따르지|받아들이지)|not (?:an? )?instructions?|untrusted (?:data|input)|treat (?:it|this|the following) as data/i;
 const INPUT_LIMIT = /\.slice\(\s*-?\d|max_tokens|maxTokens|MAX_[A-Z_]*(?:LEN|LENGTH|CHARS|TURNS|TOKENS)\b/;
 const RAW_HTML = /dangerouslySetInnerHTML|\.innerHTML\s*=|\bv-html\b|\{@html\b/;
 const DYNAMIC_CODE = /\beval\s*\(|new\s+Function\s*\(/;
@@ -145,7 +149,11 @@ export function judgeSecurity({ root, all, src, appSrc, byRel, importsOf, sites 
       if (SYSTEM_SLOT.test(l) && USER_DATA.test(l.replace(SYSTEM_SLOT, ''))) injected.push({ file: f.rel, line: i + 1, code: lineText(f.raw, i + 1) });
     });
   }
-  if (injected.length) item('prompt-injection', 'LLM01', '프롬프트 인젝션', 'mid', '사용자(브라우저)가 보낸 값이 AI의 시스템 지시문에 들어가요. 이용자가 값을 조작해 AI에게 원래 규칙을 무시하라고 지시할 수 있어요.',
+  const sanitized = serverFiles.flatMap((f) => findLines(f, SANITIZE));
+  const fenced = serverFiles.flatMap((f) => findLines(f, DATA_FENCE));
+  if (injected.length && sanitized.length && fenced.length) item('prompt-injection', 'LLM01', '프롬프트 인젝션', 'ok', '브라우저가 보낸 값이 시스템 지시문에 들어가지만, 서버에서 먼저 검사하고 "지시가 아니다"라는 표시로 데이터를 구분해 넣고 있어요. 검사 범위가 충분한지는 직접 확인하세요.', [],
+    [...injected.slice(0, 1), ...sanitized.slice(0, 2), ...fenced.slice(0, 1)]);
+  else if (injected.length) item('prompt-injection', 'LLM01', '프롬프트 인젝션', 'mid', '사용자(브라우저)가 보낸 값이 AI의 시스템 지시문에 들어가요. 이용자가 값을 조작해 AI에게 원래 규칙을 무시하라고 지시할 수 있어요.',
     ['시스템 지시문에는 서버가 직접 만든 값만 넣기', '브라우저가 보낸 값은 허용 목록·길이 제한으로 걸러서 넣기', 'AI 응답도 서버에서 한 번 더 검사하기'], injected);
   else if (serverSites.length) item('prompt-injection', 'LLM01', '프롬프트 인젝션', 'lo', '시스템 지시문에 사용자 값이 직접 들어가는 코드를 찾지 못했어요. 사용자 메시지 자체를 통한 인젝션은 정적 분석으로 막을 수 없어서 응답 검사가 필요해요.');
   else item('prompt-injection', 'LLM01', '프롬프트 인젝션', 'lo', '서버에서 AI를 부르는 코드가 없어요.');
